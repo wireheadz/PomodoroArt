@@ -4,13 +4,12 @@ import UserNotifications
 
 private var verificationExitCode: Int32 = 0
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKScriptMessageHandler, WKNavigationDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKScriptMessageHandler, WKScriptMessageHandlerWithReply, WKNavigationDelegate, UNUserNotificationCenterDelegate {
     private let popover = NSPopover()
     private var webView: WKWebView!
     private var statusItem: NSStatusItem!
-    private var server: Process?
-    private var serverOutput = ""
-    private var loaded = false
+    private lazy var storage = AppStorage()
+    private let interfaceURL = Bundle.main.resourceURL!.appendingPathComponent("index.html")
     private var ready = false
     private var awaitingStageConfirmation = false
     private var popoverIsClosing = false
@@ -30,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         let config = WKWebViewConfiguration()
         config.userContentController.add(self, name: "pomodoro")
         config.userContentController.add(self, name: "controls")
-        config.mediaTypesRequiringUserActionForPlayback = []
+        config.userContentController.addScriptMessageHandler(self, contentWorld: .page, name: "storage")
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
         let controller = NSViewController()
@@ -52,7 +51,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         popover.delegate = self
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
         if !verifying { enableNotifications() }
-        do { try startServer() } catch { showError("Unable to start Pomodoro", error.localizedDescription) }
+        if verifying {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            storage = AppStorage(directory: folder, captureFile: folder.appendingPathComponent("capture.json"), vault: folder.appendingPathComponent("no-vault"))
+        }
+        webView.loadFileURL(interfaceURL, allowingReadAccessTo: interfaceURL.deletingLastPathComponent())
     }
 
     private func setupMenu() {
@@ -62,53 +65,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         updateIcon(state: "Pausing")
     }
 
-    private func startServer() throws {
-        let resources = Bundle.main.resourceURL!
-        let applicationSupport = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Pomodoro Art", isDirectory: true)
-        try FileManager.default.createDirectory(at: applicationSupport, withIntermediateDirectories: true)
-        for name in ["settings.json", "completions.json"] {
-            let destination = applicationSupport.appendingPathComponent(name)
-            let seed = resources.appendingPathComponent("web/data/\(name)")
-            if !FileManager.default.fileExists(atPath: destination.path), FileManager.default.fileExists(atPath: seed.path) {
-                try FileManager.default.copyItem(at: seed, to: destination)
-            }
-        }
-        let process = Process()
-        process.executableURL = resources.appendingPathComponent("node")
-        process.arguments = [resources.appendingPathComponent("web/server.js").path]
-        var environment = ProcessInfo.processInfo.environment
-        environment["POMODORO_PORT"] = "0"
-        environment["POMODORO_DATA_DIRECTORY"] = applicationSupport.path
-        process.environment = environment
-        let output = Pipe()
-        process.standardOutput = output
-        let logURL = applicationSupport.appendingPathComponent("server.log")
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
-        process.standardError = try FileHandle(forWritingTo: logURL)
-        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
-            DispatchQueue.main.async { self?.receiveServerOutput(chunk) }
-        }
-        process.terminationHandler = { [weak self] process in
-            DispatchQueue.main.async {
-                guard NSApp.isRunning else { return }
-                self?.showError("Pomodoro server stopped", "Exit code \(process.terminationStatus). Please reopen the app. Details are in \(logURL.path).")
-            }
-        }
-        server = process
-        try process.run()
-    }
-
-    private func receiveServerOutput(_ chunk: String) {
-        guard !loaded else { return }
-        serverOutput += chunk
-        guard let line = serverOutput.split(separator: "\n").first(where: { $0.hasPrefix("Pomodoro running at ") }),
-              let url = URL(string: String(line.dropFirst("Pomodoro running at ".count))) else { return }
-        loaded = true
-        webView.load(URLRequest(url: url))
-    }
-
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         ready = true
         showPopover()
@@ -116,12 +72,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        let allowed = navigationAction.request.url?.host == "127.0.0.1"
+        let allowed = navigationAction.request.url?.standardizedFileURL == interfaceURL.standardizedFileURL
         decisionHandler(allowed ? .allow : .cancel)
     }
 
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage, replyHandler: @escaping (Any?, String?) -> Void) {
+        guard message.frameInfo.isMainFrame, message.webView === webView,
+              let request = message.body as? [String: Any], let operation = request["operation"] as? String else {
+            replyHandler(nil, "Invalid storage request"); return
+        }
+        do {
+            let result = try storage.handle(operation, method: request["method"] as? String ?? "GET", body: request["body"] as? [String: Any] ?? [:])
+            replyHandler(result, nil)
+        } catch { replyHandler(nil, error.localizedDescription) }
+    }
+
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.frameInfo.isMainFrame, message.frameInfo.securityOrigin.host == "127.0.0.1",
+        guard message.frameInfo.isMainFrame, message.webView === webView,
               let body = message.body as? [String: Any] else { return }
         if message.name == "controls" {
             switch body["action"] as? String {
@@ -226,9 +193,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
     // Exercise the WebKit bridge and hidden countdown without recording a session.
     private func verifyApp() {
         let setup = """
-        const originalFetch = window.fetch;
-        window.fetch = (url, options) => options?.method && options.method !== 'GET'
-          ? Promise.resolve({ ok: true, json: async () => ({}) }) : originalFetch(url, options);
         applyDurationSettings({ focusMinutes: 1 / 6, breakMinutes: 1 / 6 });
         start();
         window.pomodoroApp.setNotificationPermission(true);
@@ -240,7 +204,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         points.every(([x, y]) => document.elementFromPoint(bounds.left + x, bounds.top + y)?.closest('#native-quit') === quit)
           && Math.abs((icon.left + icon.width / 2) - (bounds.left + bounds.width / 2)) < 0.1
           && Math.abs((icon.top + icon.height / 2) - (bounds.top + bounds.height / 2)) < 0.1
-          && document.getElementById('native-notifications').hidden;
+          && document.getElementById('native-notifications').hidden
+          && document.getElementById('focus-duration').value === '10'
+          && document.getElementById('break-duration').value === '10';
         """
         webView.evaluateJavaScript(setup) { result, error in
             guard error == nil, result as? Bool == true else {
@@ -267,14 +233,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
                         try? png.write(to: URL(fileURLWithPath: "/tmp/pomodoro-popover.png"))
                     }
                     self.popover.performClose(nil)
-                    self.webView.evaluateJavaScript("remaining = 1; deadline = Date.now() - 1; tick()")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
                         guard self.popover.isShown else {
                             self.finishVerification(false, "Completion did not open the menu bar popover"); return
                         }
-                        self.webView.evaluateJavaScript("awaitingConfirmation && !running && alarmAudio.paused && document.getElementById('completion-title').textContent === 'Focus complete' && document.getElementById('completion-continue').textContent === 'Start break'") { result, error in
+                        self.webView.evaluateJavaScript("awaitingConfirmation && !running && document.getElementById('completion-title').textContent === 'Focus complete' && document.getElementById('completion-continue').textContent === 'Start break'") { result, error in
                             guard error == nil, result as? Bool == true else {
-                                self.finishVerification(false, "Hidden completion played custom audio or did not finish"); return
+                                self.finishVerification(false, "Hidden countdown did not finish"); return
                             }
                             if let window = self.popover.contentViewController?.view.window {
                                 let capture = Process()
@@ -288,8 +253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
                                     self.finishVerification(false, "Start break button did not advance the timer"); return
                                 }
                                 self.popover.performClose(nil)
-                                self.webView.evaluateJavaScript("remaining = 1; deadline = Date.now() - 1; tick()")
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 11) {
                                     guard self.popover.isShown else {
                                         self.finishVerification(false, "Break completion did not open the popover"); return
                                     }
@@ -315,8 +279,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         verificationExitCode = success ? 0 : 1
         print("\(success ? "PASS" : "FAIL"): \(description)")
         if !success {
-            server?.terminationHandler = nil
-            server?.terminate()
             exit(1)
         }
         NSApp.terminate(nil)
@@ -371,8 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         notificationGeneration += 1
         notifications.removePendingNotificationRequests(withIdentifiers: [notificationID])
         deadlineTimer?.invalidate()
-        server?.terminationHandler = nil
-        server?.terminate()
+        if verifying { try? FileManager.default.removeItem(at: storage.directory) }
     }
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .sound, .list])

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="menu-bar-app">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -85,7 +85,7 @@
         width: 88px;
         height: 88px;
         flex: 0 0 auto;
-        background: url("assets/cycle-stamp.png") center / contain no-repeat;
+        background: url("cycle-stamp.png") center / contain no-repeat;
         opacity: .82;
         animation: stamp-in .42s cubic-bezier(.2,.8,.2,1) both;
       }
@@ -351,7 +351,6 @@
   </head>
   <body>
     <div class="cycle-log" id="cycle-log" role="status" aria-label="0 completed cycles today"></div>
-    <audio id="alarm-audio" src="assets/freesound_community-alarm-beep-34359.mp3" loop preload="auto" playsinline></audio>
     <main>
       <div class="native-only app-identity"><span class="app-name">Pomodoro</span><span class="app-state" id="app-state">Ready to focus</span></div>
       <button class="native-only native-quit" id="native-quit" aria-label="Quit Pomodoro" title="Quit Pomodoro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 3v8M6.4 5.8a8 8 0 1 0 11.2 0"/></svg></button>
@@ -386,9 +385,13 @@
     </main>
 
     <script>
-      if (window.webkit?.messageHandlers?.pomodoro) {
-        document.documentElement.classList.add("menu-bar-app");
+      function readStorage(operation, options = {}) {
+        return window.webkit.messageHandlers.storage.postMessage({
+          operation, method: options.method || "GET",
+          body: options.body ? JSON.parse(options.body) : {},
+        }).then(data => ({ ok: true, json: async () => data }));
       }
+
       function validDurationMinutes(minutes, maximum) {
         const seconds = minutes * 60;
         return Number.isFinite(seconds) && seconds >= 10 && seconds <= maximum * 60
@@ -420,7 +423,6 @@
       let deadline = 0;
       let intervalId = null;
       let awaitingConfirmation = false;
-      let alarmUnlockPromise = null;
       let captureControlInitialized = false;
       let lastCaptureControlUpdatedAt = null;
       let cycleDate = localDateStamp();
@@ -434,7 +436,6 @@
       const sliderRows = [$("focus-row"), $("break-row")];
       const previews = [$("focus-preview"), $("break-preview")];
       const cycleLog = $("cycle-log");
-      const alarmAudio = $("alarm-audio");
 
       function localDateStamp() {
         const now = new Date();
@@ -485,8 +486,8 @@
         render();
       }
 
-      function syncDurationSettingsFromServer() {
-        fetch("/api/settings", { cache: "no-store" })
+      function loadDurationSettingsFromDisk() {
+        readStorage("settings", {})
           .then((response) => {
             if (!response.ok) throw new Error("Unable to load duration settings");
             return response.json();
@@ -501,9 +502,8 @@
           breakMinutes: modes[1].seconds / 60,
         };
         saveDurationSettingsLocally();
-        fetch("/api/settings", {
+        readStorage("settings", {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(settings),
         }).catch(() => {});
       }
@@ -520,24 +520,21 @@
           mode: modeIndex === 0 ? "Focus" : "Break",
           awaitingConfirmation,
         });
-        fetch("/api/status", {
+        readStorage("status", {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ state: currentPomodoroStatus() }),
         }).catch(() => {});
       }
 
       function persistCaptureControl(paused) {
-        fetch("/api/capture-control", {
+        readStorage("capture-control", {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ paused }),
         }).catch(() => {});
       }
 
       function pauseForCaptureControl() {
         if (running) remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-        stopAlarmLoop();
         awaitingConfirmation = false;
         running = false;
         clearInterval(intervalId);
@@ -560,8 +557,8 @@
         }
       }
 
-      function syncCaptureControlFromServer() {
-        fetch("/api/capture-control", { cache: "no-store" })
+      function loadCaptureControlFromDisk() {
+        readStorage("capture-control", {})
           .then((response) => {
             if (!response.ok) throw new Error("Unable to load capture control");
             return response.json();
@@ -585,7 +582,7 @@
         );
       }
 
-      function applyServerCycleData(data) {
+      function applyCycleData(data) {
         if (!data || typeof data.date !== "string" || !Number.isFinite(Number(data.count))) return;
         cycleDate = data.date;
         completedCycles = Math.max(0, Number(data.count));
@@ -593,13 +590,13 @@
         renderCycleLog();
       }
 
-      function syncCycleLogFromServer() {
-        fetch("/api/completions/today", { cache: "no-store" })
+      function loadCycleLogFromDisk() {
+        readStorage("completions/today", {})
           .then((response) => {
             if (!response.ok) throw new Error("Unable to load completion log");
             return response.json();
           })
-          .then(applyServerCycleData)
+          .then(applyCycleData)
           .catch(() => {});
       }
 
@@ -612,9 +609,8 @@
         completedCycles += 1;
         saveCycleCount();
         renderCycleLog();
-        fetch("/api/completions", {
+        readStorage("completions", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             focusMinutes: modes[0].seconds / 60,
             breakMinutes: modes[1].seconds / 60,
@@ -624,39 +620,8 @@
             if (!response.ok) throw new Error("Unable to save completion");
             return response.json();
           })
-          .then(applyServerCycleData)
+          .then(applyCycleData)
           .catch(() => {});
-      }
-
-      function unlockAlarmAudio() {
-        if (window.webkit?.messageHandlers?.pomodoro) return;
-        if (alarmUnlockPromise) return;
-        const previousVolume = alarmAudio.volume;
-        alarmAudio.volume = 0;
-        alarmUnlockPromise = alarmAudio.play()
-          .then(() => {
-            alarmAudio.pause();
-            alarmAudio.currentTime = 0;
-            alarmAudio.volume = previousVolume;
-          })
-          .catch(() => {
-            alarmUnlockPromise = null;
-            alarmAudio.volume = previousVolume;
-          });
-      }
-
-      function startAlarmLoop() {
-        if (window.webkit?.messageHandlers?.pomodoro) return;
-        stopAlarmLoop();
-        alarmAudio.currentTime = 0;
-        alarmAudio.volume = .82;
-        alarmAudio.play().catch(() => {});
-      }
-
-      function stopAlarmLoop() {
-        if (window.webkit?.messageHandlers?.pomodoro) return;
-        alarmAudio.pause();
-        alarmAudio.currentTime = 0;
       }
 
       function render() {
@@ -735,7 +700,6 @@
         intervalId = null;
         if (modeIndex === 1) recordCompletedCycle();
         awaitingConfirmation = true;
-        startAlarmLoop();
         persistPomodoroStatus();
         persistCaptureControl(true);
         if (navigator.vibrate) navigator.vibrate([140, 80, 220]);
@@ -743,7 +707,6 @@
       }
 
       function confirmStage() {
-        stopAlarmLoop();
         awaitingConfirmation = false;
         modeIndex = (modeIndex + 1) % modes.length;
         remaining = modes[modeIndex].seconds;
@@ -751,7 +714,6 @@
       }
 
       function toggleTimer() {
-        unlockAlarmAudio();
         if (awaitingConfirmation) {
           confirmStage();
           return;
@@ -760,7 +722,6 @@
       }
 
       function reset() {
-        stopAlarmLoop();
         awaitingConfirmation = false;
         stop();
         remaining = modes[modeIndex].seconds;
@@ -813,10 +774,10 @@
       };
       render();
       persistPomodoroStatus();
-      syncCycleLogFromServer();
-      syncDurationSettingsFromServer();
-      syncCaptureControlFromServer();
-      setInterval(syncCaptureControlFromServer, 1000);
+      loadCycleLogFromDisk();
+      loadDurationSettingsFromDisk();
+      loadCaptureControlFromDisk();
+      setInterval(loadCaptureControlFromDisk, 1000);
     </script>
   </body>
 </html>
