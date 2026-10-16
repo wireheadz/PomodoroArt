@@ -1,0 +1,822 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#10100f" />
+    <title>Pomodoro</title>
+    <style>
+      @font-face {
+        font-family: "Maple Mono Local";
+        src: local("Maple Mono NF CN"), local("Maple Mono");
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+      }
+
+      :root {
+        --ink: #f1eee5;
+        --muted: #8f8c83;
+        --surface: #10100f;
+        --accent: #ff7353;
+        --degree: 0deg;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        min-width: 320px;
+        min-height: 100dvh;
+        margin: 0;
+        overflow: hidden;
+        color: var(--ink);
+        background: var(--surface);
+        font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      body::before {
+        position: fixed;
+        inset: 0;
+        z-index: -2;
+        content: "";
+        opacity: .32;
+        background-image: radial-gradient(rgba(255,255,255,.09) .5px, transparent .5px);
+        background-size: 5px 5px;
+        pointer-events: none;
+      }
+
+      main {
+        display: grid;
+        grid-template-rows: 1fr auto;
+        min-height: 100dvh;
+        padding: clamp(22px, 4vw, 48px);
+      }
+
+      footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        letter-spacing: .07em;
+        font-size: 11px;
+        line-height: 1;
+      }
+
+      .clock-stage {
+        position: relative;
+        display: grid;
+        place-items: center;
+        min-height: 0;
+      }
+
+      .cycle-log {
+        position: fixed;
+        top: clamp(46px, 6vw, 72px);
+        left: clamp(46px, 6vw, 72px);
+        z-index: 4;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 18px;
+        width: min(340px, 72vw);
+        pointer-events: none;
+      }
+
+      .cycle-mark {
+        width: 88px;
+        height: 88px;
+        flex: 0 0 auto;
+        background: url("assets/cycle-stamp.png") center / contain no-repeat;
+        opacity: .82;
+        animation: stamp-in .42s cubic-bezier(.2,.8,.2,1) both;
+      }
+
+      .cycle-mark:nth-child(3n + 1) { transform: rotate(-7deg); }
+      .cycle-mark:nth-child(3n + 2) { transform: rotate(5deg); }
+      .cycle-mark:nth-child(3n) { transform: rotate(-2deg); }
+
+      @keyframes stamp-in {
+        from { opacity: 0; scale: .55; }
+        to { opacity: .82; scale: 1; }
+      }
+
+      .orb {
+        position: absolute;
+        width: min(74vw, 74vh);
+        aspect-ratio: 1;
+        border-radius: 50%;
+        opacity: .76;
+        background: conic-gradient(from -90deg, var(--accent) var(--degree), rgba(255,255,255,.075) 0deg);
+        -webkit-mask: radial-gradient(transparent 64.5%, #000 65.5%, #000 66.6%, transparent 67.6%);
+        mask: radial-gradient(transparent 64.5%, #000 65.5%, #000 66.6%, transparent 67.6%);
+        transition: background .35s linear;
+      }
+
+      .orb::before, .orb::after {
+        position: absolute;
+        inset: 16%;
+        border: 1px solid rgba(241,238,229,.08);
+        border-radius: inherit;
+        content: "";
+      }
+
+      .orb::after { inset: 32%; }
+
+      .timer-button {
+        position: relative;
+        z-index: 1;
+        border: 0;
+        padding: 0 1vw 1.5vh;
+        color: inherit;
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .timer-button.is-alerting {
+        animation: alarm-pulse 1.1s ease-in-out infinite;
+      }
+
+      @keyframes alarm-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: .58; }
+      }
+
+      .time {
+        display: block;
+        font-family: "Maple Mono Local", "SF Mono", ui-monospace, monospace;
+        font-size: clamp(76px, 19vw, 300px);
+        font-weight: 400;
+        letter-spacing: .055em;
+        line-height: .84;
+        font-variant-numeric: tabular-nums;
+        text-indent: .055em;
+      }
+
+      .timer-button:focus-visible, .reset:focus-visible, .duration:focus-visible {
+        outline: 1px solid var(--accent);
+        outline-offset: 7px;
+      }
+
+      .duration-controls {
+        position: absolute;
+        bottom: clamp(20px, 5vh, 56px);
+        left: 50%;
+        z-index: 2;
+        display: grid;
+        gap: 18px;
+        width: min(320px, 58vw);
+        transform: translateX(-50%);
+      }
+
+      .slider-row {
+        --control-accent: #ff7353;
+        --slider-progress: 40%;
+        --thumb-position: 40%;
+        position: relative;
+        width: 100%;
+        opacity: .42;
+        transition: opacity .25s ease;
+      }
+
+      .slider-row[data-mode="break"] { --control-accent: #8bb9b1; }
+      .slider-row.is-active, .slider-row:focus-within, .slider-row.is-previewing { opacity: 1; }
+
+      .duration {
+        display: block;
+        width: 100%;
+        height: 20px;
+        margin: 0;
+        appearance: none;
+        -webkit-appearance: none;
+        background: transparent;
+        cursor: ew-resize;
+      }
+
+      .duration:disabled {
+        cursor: default;
+        opacity: .3;
+      }
+
+      .duration::-webkit-slider-runnable-track {
+        height: 1px;
+        background: linear-gradient(90deg, var(--control-accent) 0 var(--slider-progress), rgba(241,238,229,.18) var(--slider-progress) 100%);
+      }
+
+      .duration::-webkit-slider-thumb {
+        width: 11px;
+        height: 11px;
+        margin-top: -5px;
+        border: 0;
+        border-radius: 50%;
+        appearance: none;
+        -webkit-appearance: none;
+        background: var(--ink);
+        box-shadow: 0 0 0 4px var(--surface), 0 0 18px color-mix(in srgb, var(--control-accent) 55%, transparent);
+      }
+
+      .duration::-moz-range-track {
+        height: 1px;
+        background: rgba(241,238,229,.18);
+      }
+
+      .duration::-moz-range-progress {
+        height: 1px;
+        background: var(--control-accent);
+      }
+
+      .duration::-moz-range-thumb {
+        width: 11px;
+        height: 11px;
+        border: 0;
+        border-radius: 50%;
+        background: var(--ink);
+        box-shadow: 0 0 0 4px var(--surface);
+      }
+
+      .duration-preview {
+        position: absolute;
+        top: -29px;
+        left: clamp(13px, var(--thumb-position), calc(100% - 13px));
+        z-index: 3;
+        padding: 5px 7px;
+        border: 1px solid rgba(241,238,229,.13);
+        border-radius: 5px;
+        color: var(--ink);
+        background: rgba(22,22,20,.92);
+        font: 400 11px/1 "Maple Mono Local", "SF Mono", ui-monospace, monospace;
+        letter-spacing: .04em;
+        opacity: 0;
+        transform: translate(-50%, 4px);
+        transition: opacity .14s ease, transform .14s ease;
+        pointer-events: none;
+      }
+
+      .slider-row.is-previewing .duration-preview {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+
+      footer { color: var(--muted); }
+
+      .reset {
+        border: 0;
+        padding: 0;
+        color: var(--muted);
+        font: inherit;
+        letter-spacing: .07em;
+        background: none;
+        cursor: pointer;
+      }
+
+      .reset:hover { color: var(--ink); }
+
+      @media (max-width: 580px) {
+        main { padding: 22px; }
+        .orb { width: 118vw; }
+        .time { font-size: clamp(66px, 18.5vw, 118px); }
+      }
+
+      .menu-bar-app .orb {
+        width: min(82vw, 60vh);
+        transform: translateY(-24px);
+      }
+      .menu-bar-app .timer-button { transform: translateY(-24px); }
+      .menu-bar-app .duration-controls { width: min(300px, 72vw); }
+      .menu-bar-app .cycle-log { top: 20px; left: 22px; gap: 8px; }
+      .menu-bar-app .cycle-mark { width: 28px; height: 28px; }
+
+      .native-only { display: none; }
+      html.menu-bar-app, .menu-bar-app body { background: transparent; }
+      .menu-bar-app { --muted: rgba(241,238,229,.66); }
+      .menu-bar-app body::before { display: none; }
+      .menu-bar-app body {
+        background: linear-gradient(145deg, rgba(255,255,255,.07), transparent 48%, rgba(86,133,190,.08)), rgba(0,0,0,.28);
+      }
+      .menu-bar-app main { padding: 26px; }
+      .menu-bar-app .native-only { display: flex; }
+      .app-identity { position: absolute; top: 26px; left: 26px; flex-direction: column; gap: 6px; }
+      .app-name { font-size: 14px; font-weight: 600; letter-spacing: -.02em; }
+      .app-state { color: rgba(241,238,229,.5); font-size: 11px; }
+      .native-quit {
+        position: absolute; top: 24px; right: 24px; width: 28px; height: 28px;
+        z-index: 5; padding: 0; appearance: none;
+        border: 0; background: transparent; color: rgba(241,238,229,.45);
+        cursor: pointer; align-items: center; justify-content: center;
+      }
+      .native-quit:hover { color: var(--ink); }
+      .native-quit svg { display: block; flex-shrink: 0; width: 15px; height: 15px; pointer-events: none; }
+      .menu-bar-app .orb { width: 224px; transform: translateY(-40px); opacity: .9; }
+      .menu-bar-app .timer-button { transform: translateY(-40px); }
+      .menu-bar-app .time { font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 67px; font-weight: 300; letter-spacing: -.045em; }
+      .menu-bar-app .duration-controls { width: 100%; bottom: 32px; gap: 20px; }
+      .menu-bar-app .slider-row { opacity: 1; }
+      .menu-bar-app .duration-preview {
+        position: static; transform: none; opacity: 1; background: none; padding: 0;
+        border: 0;
+        font: 11px -apple-system, BlinkMacSystemFont, sans-serif; color: rgba(241,238,229,.66);
+        display: block; margin-bottom: 9px; text-align: left;
+      }
+      .menu-bar-app .duration-preview::before { margin-right: 8px; color: rgba(241,238,229,.75); }
+      .menu-bar-app #focus-preview::before { content: 'Focus'; }
+      .menu-bar-app #break-preview::before { content: 'Break'; }
+      .menu-bar-app .duration-preview { pointer-events: none; }
+      .menu-bar-app .duration::-webkit-slider-thumb { box-shadow: none; width: 10px; height: 10px; }
+      .menu-bar-app .slider-row.is-previewing .duration-preview { transform: none; }
+      .menu-bar-app footer { gap: 20px; font-size: 11px; letter-spacing: 0; }
+      .menu-bar-app .reset { letter-spacing: 0; }
+      .menu-bar-app .reset { order: -1; }
+      .native-notifications { margin-left: auto; color: var(--muted); font: inherit; border: 0; background: none; padding: 0; cursor: pointer; }
+      .native-notifications:hover { color: var(--ink); }
+      .native-notifications[hidden] { display: none !important; }
+      .menu-bar-app .cycle-log { top: 82px; left: 26px; gap: 5px; width: 300px; }
+      .menu-bar-app .cycle-mark { width: 18px; height: 18px; opacity: .5; }
+      .native-message { position: absolute; top: 62px; left: 26px; right: 26px; color: #e7bd89; font-size: 11px; line-height: 1.4; }
+      .completion-message { display: none; }
+      .menu-bar-app.session-finished .completion-message {
+        display: flex; position: absolute; inset: 0; flex-direction: column;
+        align-items: center; justify-content: center; gap: 14px; text-align: center;
+      }
+      .menu-bar-app.session-finished .timer-button,
+      .menu-bar-app.session-finished .orb,
+      .menu-bar-app.session-finished .duration-controls { visibility: hidden; pointer-events: none; }
+      .completion-mark { width: 54px; height: 54px; margin-bottom: 6px; color: var(--accent); }
+      .completion-title { margin: 0; font-size: 25px; font-weight: 500; letter-spacing: -.035em; }
+      .completion-detail { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; max-width: 260px; }
+      .completion-continue {
+        margin-top: 10px; border: 1px solid rgba(255,255,255,.15); border-radius: 10px;
+        background: rgba(255,255,255,.12); color: var(--ink); padding: 12px 24px;
+        font: 500 13px -apple-system, BlinkMacSystemFont, sans-serif; cursor: pointer;
+      }
+      .completion-continue:hover { background: rgba(255,255,255,.19); }
+    </style>
+  </head>
+  <body>
+    <div class="cycle-log" id="cycle-log" role="status" aria-label="0 completed cycles today"></div>
+    <audio id="alarm-audio" src="assets/freesound_community-alarm-beep-34359.mp3" loop preload="auto" playsinline></audio>
+    <main>
+      <div class="native-only app-identity"><span class="app-name">Pomodoro</span><span class="app-state" id="app-state">Ready to focus</span></div>
+      <button class="native-only native-quit" id="native-quit" aria-label="Quit Pomodoro" title="Quit Pomodoro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 3v8M6.4 5.8a8 8 0 1 0 11.2 0"/></svg></button>
+      <div class="native-message native-only" id="native-message" role="status"></div>
+      <section class="clock-stage" aria-label="Pomodoro timer">
+        <div class="completion-message" role="status" aria-live="polite">
+          <svg class="completion-mark" viewBox="0 0 56 56" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="28" cy="28" r="24"/><path d="m18 28 7 7 14-15" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <h1 class="completion-title" id="completion-title">Focus complete</h1>
+          <p class="completion-detail" id="completion-detail">Your focus session is finished. Take a break.</p>
+          <button class="completion-continue" id="completion-continue" type="button">Start break</button>
+        </div>
+        <div class="orb" id="orb" aria-hidden="true"></div>
+        <button class="timer-button" id="toggle" type="button" aria-label="Start timer">
+          <output class="time" id="time" aria-live="polite">25:00</output>
+        </button>
+        <div class="duration-controls">
+          <div class="slider-row is-active" id="focus-row" data-mode="focus">
+            <output class="duration-preview" id="focus-preview" for="focus-duration">25:00</output>
+            <input class="duration" id="focus-duration" type="range" min="10" max="3600" value="1500" step="10" aria-label="Focus duration in seconds" />
+          </div>
+          <div class="slider-row" id="break-row" data-mode="break">
+            <output class="duration-preview" id="break-preview" for="break-duration">05:00</output>
+            <input class="duration" id="break-duration" type="range" min="10" max="1800" value="300" step="10" aria-label="Break duration in seconds" />
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        <button class="native-only native-notifications" id="native-notifications" type="button" hidden>Enable notifications</button>
+        <button class="reset" id="reset" type="button">Reset</button>
+      </footer>
+    </main>
+
+    <script>
+      if (window.webkit?.messageHandlers?.pomodoro) {
+        document.documentElement.classList.add("menu-bar-app");
+      }
+      function validDurationMinutes(minutes, maximum) {
+        const seconds = minutes * 60;
+        return Number.isFinite(seconds) && seconds >= 10 && seconds <= maximum * 60
+          && Math.abs(seconds - Math.round(seconds)) < 1e-6 && Math.round(seconds) % 10 === 0;
+      }
+
+      function loadDurationSettings() {
+        try {
+          const settings = JSON.parse(localStorage.getItem("pomodoro-duration-settings"));
+          const focusMinutes = Number(settings?.focusMinutes);
+          const breakMinutes = Number(settings?.breakMinutes);
+          if (!validDurationMinutes(focusMinutes, 60)) throw new Error();
+          if (!validDurationMinutes(breakMinutes, 30)) throw new Error();
+          return { focusMinutes, breakMinutes };
+        } catch {
+          return { focusMinutes: 25, breakMinutes: 5 };
+        }
+      }
+
+      const savedDurations = loadDurationSettings();
+      const modes = [
+        { name: "Focus", seconds: Math.round(savedDurations.focusMinutes * 60), min: 10, max: 3600, accent: "#ff7353" },
+        { name: "Break", seconds: Math.round(savedDurations.breakMinutes * 60), min: 10, max: 1800, accent: "#8bb9b1" },
+      ];
+
+      let modeIndex = 0;
+      let remaining = modes[0].seconds;
+      let running = false;
+      let deadline = 0;
+      let intervalId = null;
+      let awaitingConfirmation = false;
+      let alarmUnlockPromise = null;
+      let captureControlInitialized = false;
+      let lastCaptureControlUpdatedAt = null;
+      let cycleDate = localDateStamp();
+      let completedCycles = loadCycleCount();
+
+      const $ = (id) => document.getElementById(id);
+      const time = $("time");
+      const toggle = $("toggle");
+      const orb = $("orb");
+      const sliders = [$("focus-duration"), $("break-duration")];
+      const sliderRows = [$("focus-row"), $("break-row")];
+      const previews = [$("focus-preview"), $("break-preview")];
+      const cycleLog = $("cycle-log");
+      const alarmAudio = $("alarm-audio");
+
+      function localDateStamp() {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, "0");
+        const day = String(now.getDate()).padStart(2, "0");
+        return `${year}-${month}-${day}`;
+      }
+
+      function loadCycleCount() {
+        try {
+          const saved = JSON.parse(localStorage.getItem("pomodoro-cycle-log"));
+          if (saved?.date !== cycleDate) return 0;
+          return Math.max(0, Number(saved.count) || 0);
+        } catch {
+          return 0;
+        }
+      }
+
+      function saveCycleCount() {
+        try {
+          localStorage.setItem("pomodoro-cycle-log", JSON.stringify({
+            date: cycleDate,
+            count: completedCycles,
+          }));
+        } catch {}
+      }
+
+      function saveDurationSettingsLocally() {
+        try {
+          localStorage.setItem("pomodoro-duration-settings", JSON.stringify({
+            focusMinutes: modes[0].seconds / 60,
+            breakMinutes: modes[1].seconds / 60,
+          }));
+        } catch {}
+      }
+
+      function applyDurationSettings(settings) {
+        const focusMinutes = Number(settings?.focusMinutes);
+        const breakMinutes = Number(settings?.breakMinutes);
+        if (!validDurationMinutes(focusMinutes, 60)) return;
+        if (!validDurationMinutes(breakMinutes, 30)) return;
+        if (running || awaitingConfirmation) return;
+        modes[0].seconds = Math.round(focusMinutes * 60);
+        modes[1].seconds = Math.round(breakMinutes * 60);
+        remaining = modes[modeIndex].seconds;
+        saveDurationSettingsLocally();
+        render();
+      }
+
+      function syncDurationSettingsFromServer() {
+        fetch("/api/settings", { cache: "no-store" })
+          .then((response) => {
+            if (!response.ok) throw new Error("Unable to load duration settings");
+            return response.json();
+          })
+          .then(applyDurationSettings)
+          .catch(() => {});
+      }
+
+      function persistDurationSettings() {
+        const settings = {
+          focusMinutes: modes[0].seconds / 60,
+          breakMinutes: modes[1].seconds / 60,
+        };
+        saveDurationSettingsLocally();
+        fetch("/api/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(settings),
+        }).catch(() => {});
+      }
+
+      function currentPomodoroStatus() {
+        if (!running) return "Pausing";
+        return modeIndex === 0 ? "Working" : "Resting";
+      }
+
+      function persistPomodoroStatus() {
+        window.webkit?.messageHandlers?.pomodoro?.postMessage({
+          state: currentPomodoroStatus(),
+          deadline: running ? deadline : null,
+          mode: modeIndex === 0 ? "Focus" : "Break",
+          awaitingConfirmation,
+        });
+        fetch("/api/status", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ state: currentPomodoroStatus() }),
+        }).catch(() => {});
+      }
+
+      function persistCaptureControl(paused) {
+        fetch("/api/capture-control", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paused }),
+        }).catch(() => {});
+      }
+
+      function pauseForCaptureControl() {
+        if (running) remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+        stopAlarmLoop();
+        awaitingConfirmation = false;
+        running = false;
+        clearInterval(intervalId);
+        intervalId = null;
+        persistPomodoroStatus();
+        render();
+      }
+
+      function applyCaptureControl(control) {
+        if (!control || typeof control.paused !== "boolean" || typeof control.updatedAt !== "string") return;
+        if (control.updatedAt === lastCaptureControlUpdatedAt) return;
+        const isInitialControl = !captureControlInitialized;
+        captureControlInitialized = true;
+        lastCaptureControlUpdatedAt = control.updatedAt;
+        if (control.source === "pomodoro-art") return;
+        if (control.paused) {
+          pauseForCaptureControl();
+        } else if (!isInitialControl && !running) {
+          start();
+        }
+      }
+
+      function syncCaptureControlFromServer() {
+        fetch("/api/capture-control", { cache: "no-store" })
+          .then((response) => {
+            if (!response.ok) throw new Error("Unable to load capture control");
+            return response.json();
+          })
+          .then(applyCaptureControl)
+          .catch(() => {});
+      }
+
+      function renderCycleLog() {
+        const fragment = document.createDocumentFragment();
+        for (let index = 0; index < completedCycles; index += 1) {
+          const mark = document.createElement("span");
+          mark.className = "cycle-mark";
+          mark.setAttribute("aria-hidden", "true");
+          fragment.appendChild(mark);
+        }
+        cycleLog.replaceChildren(fragment);
+        cycleLog.setAttribute(
+          "aria-label",
+          `${completedCycles} completed ${completedCycles === 1 ? "cycle" : "cycles"} today`,
+        );
+      }
+
+      function applyServerCycleData(data) {
+        if (!data || typeof data.date !== "string" || !Number.isFinite(Number(data.count))) return;
+        cycleDate = data.date;
+        completedCycles = Math.max(0, Number(data.count));
+        saveCycleCount();
+        renderCycleLog();
+      }
+
+      function syncCycleLogFromServer() {
+        fetch("/api/completions/today", { cache: "no-store" })
+          .then((response) => {
+            if (!response.ok) throw new Error("Unable to load completion log");
+            return response.json();
+          })
+          .then(applyServerCycleData)
+          .catch(() => {});
+      }
+
+      function recordCompletedCycle() {
+        const today = localDateStamp();
+        if (today !== cycleDate) {
+          cycleDate = today;
+          completedCycles = 0;
+        }
+        completedCycles += 1;
+        saveCycleCount();
+        renderCycleLog();
+        fetch("/api/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            focusMinutes: modes[0].seconds / 60,
+            breakMinutes: modes[1].seconds / 60,
+          }),
+        })
+          .then((response) => {
+            if (!response.ok) throw new Error("Unable to save completion");
+            return response.json();
+          })
+          .then(applyServerCycleData)
+          .catch(() => {});
+      }
+
+      function unlockAlarmAudio() {
+        if (window.webkit?.messageHandlers?.pomodoro) return;
+        if (alarmUnlockPromise) return;
+        const previousVolume = alarmAudio.volume;
+        alarmAudio.volume = 0;
+        alarmUnlockPromise = alarmAudio.play()
+          .then(() => {
+            alarmAudio.pause();
+            alarmAudio.currentTime = 0;
+            alarmAudio.volume = previousVolume;
+          })
+          .catch(() => {
+            alarmUnlockPromise = null;
+            alarmAudio.volume = previousVolume;
+          });
+      }
+
+      function startAlarmLoop() {
+        if (window.webkit?.messageHandlers?.pomodoro) return;
+        stopAlarmLoop();
+        alarmAudio.currentTime = 0;
+        alarmAudio.volume = .82;
+        alarmAudio.play().catch(() => {});
+      }
+
+      function stopAlarmLoop() {
+        if (window.webkit?.messageHandlers?.pomodoro) return;
+        alarmAudio.pause();
+        alarmAudio.currentTime = 0;
+      }
+
+      function render() {
+        const current = modes[modeIndex];
+        const minutes = Math.floor(remaining / 60).toString().padStart(2, "0");
+        const seconds = (remaining % 60).toString().padStart(2, "0");
+        const progress = ((current.seconds - remaining) / current.seconds) * 360;
+        time.textContent = `${minutes}:${seconds}`;
+
+        sliders.forEach((slider, index) => {
+          const sliderMode = modes[index];
+          const durationSeconds = sliderMode.seconds;
+          const sliderProgress = ((durationSeconds - sliderMode.min) / (sliderMode.max - sliderMode.min)) * 100;
+          slider.value = durationSeconds;
+          slider.disabled = running || awaitingConfirmation;
+          sliderRows[index].style.setProperty("--slider-progress", `${sliderProgress}%`);
+          sliderRows[index].style.setProperty("--thumb-position", `${sliderProgress}%`);
+          sliderRows[index].classList.toggle("is-active", index === modeIndex);
+          previews[index].textContent = `${String(Math.floor(durationSeconds / 60)).padStart(2, "0")}:${String(durationSeconds % 60).padStart(2, "0")}`;
+        });
+
+        document.documentElement.style.setProperty("--accent", current.accent);
+        document.documentElement.style.setProperty("--degree", `${progress}deg`);
+        document.title = `${minutes}:${seconds} · ${current.name}`;
+        toggle.classList.toggle("is-alerting", awaitingConfirmation);
+        toggle.setAttribute(
+          "aria-label",
+          awaitingConfirmation
+            ? `Continue to ${modeIndex === 0 ? "Break" : "Focus"}`
+            : running ? "Pause timer" : "Start timer",
+        );
+        $("app-state").textContent = awaitingConfirmation ? `${current.name} finished` : running ? (modeIndex === 0 ? "Working" : "Resting") : remaining < current.seconds ? "Paused" : "Ready to focus";
+        document.documentElement.classList.toggle("session-finished", awaitingConfirmation);
+        $("completion-title").textContent = modeIndex === 0 ? "Focus complete" : "Break complete";
+        $("completion-detail").textContent = modeIndex === 0 ? "Your focus session is finished. Take a break." : "Your break is finished. Ready for the next session?";
+        $("completion-continue").textContent = modeIndex === 0 ? "Start break" : "Start focus";
+      }
+
+      function stop() {
+        if (running) remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+        running = false;
+        clearInterval(intervalId);
+        intervalId = null;
+        persistPomodoroStatus();
+        persistCaptureControl(true);
+        render();
+      }
+
+      function start() {
+        awaitingConfirmation = false;
+        if (remaining === 0) remaining = modes[modeIndex].seconds;
+        running = true;
+        deadline = Date.now() + remaining * 1000;
+        persistPomodoroStatus();
+        persistCaptureControl(false);
+        render();
+        clearInterval(intervalId);
+        intervalId = setInterval(tick, 1000);
+      }
+
+      function tick() {
+        if (!running) return;
+        remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+        if (remaining <= 0) {
+          remaining = 0;
+          render();
+          completeTimer();
+          return;
+        }
+        render();
+      }
+
+      function completeTimer() {
+        running = false;
+        clearInterval(intervalId);
+        intervalId = null;
+        if (modeIndex === 1) recordCompletedCycle();
+        awaitingConfirmation = true;
+        startAlarmLoop();
+        persistPomodoroStatus();
+        persistCaptureControl(true);
+        if (navigator.vibrate) navigator.vibrate([140, 80, 220]);
+        render();
+      }
+
+      function confirmStage() {
+        stopAlarmLoop();
+        awaitingConfirmation = false;
+        modeIndex = (modeIndex + 1) % modes.length;
+        remaining = modes[modeIndex].seconds;
+        start();
+      }
+
+      function toggleTimer() {
+        unlockAlarmAudio();
+        if (awaitingConfirmation) {
+          confirmStage();
+          return;
+        }
+        running ? stop() : start();
+      }
+
+      function reset() {
+        stopAlarmLoop();
+        awaitingConfirmation = false;
+        stop();
+        remaining = modes[modeIndex].seconds;
+        render();
+      }
+
+      toggle.addEventListener("click", toggleTimer);
+      $("completion-continue").addEventListener("click", () => { if (awaitingConfirmation) toggleTimer(); });
+      $("native-quit").addEventListener("click", () => window.webkit?.messageHandlers?.controls?.postMessage({ action: "quit" }));
+      $("native-notifications").addEventListener("click", () => window.webkit?.messageHandlers?.controls?.postMessage({ action: "enableNotifications" }));
+      $("reset").addEventListener("click", reset);
+
+      sliders.forEach((slider, index) => {
+        slider.addEventListener("pointerdown", () => sliderRows[index].classList.add("is-previewing"));
+        slider.addEventListener("focus", () => sliderRows[index].classList.add("is-previewing"));
+        slider.addEventListener("blur", () => sliderRows[index].classList.remove("is-previewing"));
+        slider.addEventListener("input", (event) => {
+          if (running || awaitingConfirmation) return;
+          modes[index].seconds = Number(event.target.value);
+          if (index === modeIndex) {
+            running = false;
+            clearInterval(intervalId);
+            intervalId = null;
+            remaining = modes[index].seconds;
+          }
+          sliderRows[index].classList.add("is-previewing");
+          saveDurationSettingsLocally();
+          render();
+        });
+        slider.addEventListener("change", persistDurationSettings);
+      });
+
+      window.addEventListener("pointerup", () => {
+        sliderRows.forEach((row) => row.classList.remove("is-previewing"));
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.target.matches("input, button")) return;
+        if (event.code === "Space") { event.preventDefault(); toggleTimer(); }
+        if (event.key.toLowerCase() === "r") reset();
+      });
+
+      renderCycleLog();
+      window.pomodoroApp = {
+        toggleTimer, reset, tick,
+        setNotificationPermission(permitted) {
+          $("native-notifications").hidden = permitted;
+        },
+        showMessage(title, message) { $("native-message").textContent = `${title}: ${message}`; },
+      };
+      render();
+      persistPomodoroStatus();
+      syncCycleLogFromServer();
+      syncDurationSettingsFromServer();
+      syncCaptureControlFromServer();
+      setInterval(syncCaptureControlFromServer, 1000);
+    </script>
+  </body>
+</html>
