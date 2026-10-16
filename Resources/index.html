@@ -369,11 +369,11 @@
         <div class="duration-controls">
           <div class="slider-row is-active" id="focus-row" data-mode="focus">
             <output class="duration-preview" id="focus-preview" for="focus-duration">25:00</output>
-            <input class="duration" id="focus-duration" type="range" min="10" max="3600" value="1500" step="10" aria-label="Focus duration in seconds" />
+            <input class="duration" id="focus-duration" type="range" min="10" max="10800" value="1500" step="10" aria-label="Focus duration in seconds" title="Drag for whole minutes. Shift-drag, scroll, or use arrow keys for 10-second adjustments." />
           </div>
           <div class="slider-row" id="break-row" data-mode="break">
             <output class="duration-preview" id="break-preview" for="break-duration">05:00</output>
-            <input class="duration" id="break-duration" type="range" min="10" max="1800" value="300" step="10" aria-label="Break duration in seconds" />
+            <input class="duration" id="break-duration" type="range" min="10" max="1800" value="300" step="10" aria-label="Break duration in seconds" title="Drag for whole minutes. Shift-drag, scroll, or use arrow keys for 10-second adjustments." />
           </div>
         </div>
       </section>
@@ -403,7 +403,7 @@
           const settings = JSON.parse(localStorage.getItem("pomodoro-duration-settings"));
           const focusMinutes = Number(settings?.focusMinutes);
           const breakMinutes = Number(settings?.breakMinutes);
-          if (!validDurationMinutes(focusMinutes, 60)) throw new Error();
+          if (!validDurationMinutes(focusMinutes, 180)) throw new Error();
           if (!validDurationMinutes(breakMinutes, 30)) throw new Error();
           return { focusMinutes, breakMinutes };
         } catch {
@@ -413,7 +413,7 @@
 
       const savedDurations = loadDurationSettings();
       const modes = [
-        { name: "Focus", seconds: Math.round(savedDurations.focusMinutes * 60), min: 10, max: 3600, accent: "#ff7353" },
+        { name: "Focus", seconds: Math.round(savedDurations.focusMinutes * 60), min: 10, max: 10800, accent: "#ff7353" },
         { name: "Break", seconds: Math.round(savedDurations.breakMinutes * 60), min: 10, max: 1800, accent: "#8bb9b1" },
       ];
 
@@ -476,7 +476,7 @@
       function applyDurationSettings(settings) {
         const focusMinutes = Number(settings?.focusMinutes);
         const breakMinutes = Number(settings?.breakMinutes);
-        if (!validDurationMinutes(focusMinutes, 60)) return;
+        if (!validDurationMinutes(focusMinutes, 180)) return;
         if (!validDurationMinutes(breakMinutes, 30)) return;
         if (running || awaitingConfirmation) return;
         modes[0].seconds = Math.round(focusMinutes * 60);
@@ -734,29 +734,61 @@
       $("native-notifications").addEventListener("click", () => window.webkit?.messageHandlers?.controls?.postMessage({ action: "enableNotifications" }));
       $("reset").addEventListener("click", reset);
 
+      let durationDrag = null;
+
+      function setDuration(index, seconds) {
+        if (running || awaitingConfirmation) return;
+        const mode = modes[index];
+        mode.seconds = Math.max(mode.min, Math.min(mode.max, Math.round(seconds / 10) * 10));
+        if (index === modeIndex) remaining = mode.seconds;
+        sliderRows[index].classList.add("is-previewing");
+        saveDurationSettingsLocally();
+        render();
+      }
+
       sliders.forEach((slider, index) => {
-        slider.addEventListener("pointerdown", () => sliderRows[index].classList.add("is-previewing"));
+        slider.addEventListener("pointerdown", (event) => {
+          if (running || awaitingConfirmation) return;
+          durationDrag = { index, fine: event.shiftKey, x: event.clientX, seconds: modes[index].seconds };
+          sliderRows[index].classList.add("is-previewing");
+          if (durationDrag.fine) {
+            event.preventDefault();
+            slider.focus({ preventScroll: true });
+            slider.setPointerCapture(event.pointerId);
+          }
+        });
+        slider.addEventListener("pointermove", (event) => {
+          if (!durationDrag?.fine || durationDrag.index !== index) return;
+          event.preventDefault();
+          setDuration(index, durationDrag.seconds + Math.round((event.clientX - durationDrag.x) / 2) * 10);
+        });
         slider.addEventListener("focus", () => sliderRows[index].classList.add("is-previewing"));
         slider.addEventListener("blur", () => sliderRows[index].classList.remove("is-previewing"));
         slider.addEventListener("input", (event) => {
-          if (running || awaitingConfirmation) return;
-          modes[index].seconds = Number(event.target.value);
-          if (index === modeIndex) {
-            running = false;
-            clearInterval(intervalId);
-            intervalId = null;
-            remaining = modes[index].seconds;
+          let seconds = Number(event.target.value);
+          if (durationDrag?.index === index && !durationDrag.fine && seconds >= 60) {
+            seconds = Math.round(seconds / 60) * 60;
           }
-          sliderRows[index].classList.add("is-previewing");
-          saveDurationSettingsLocally();
-          render();
+          setDuration(index, seconds);
         });
+        slider.addEventListener("wheel", (event) => {
+          if (running || awaitingConfirmation) return;
+          event.preventDefault();
+          const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : -event.deltaY;
+          if (!delta) return;
+          setDuration(index, modes[index].seconds + Math.sign(delta) * 10);
+          persistDurationSettings();
+        }, { passive: false });
         slider.addEventListener("change", persistDurationSettings);
       });
 
-      window.addEventListener("pointerup", () => {
+      function finishDurationDrag() {
+        if (durationDrag?.fine) persistDurationSettings();
+        durationDrag = null;
         sliderRows.forEach((row) => row.classList.remove("is-previewing"));
-      });
+      }
+      window.addEventListener("pointerup", finishDurationDrag);
+      window.addEventListener("pointercancel", finishDurationDrag);
 
       document.addEventListener("keydown", (event) => {
         if (event.target.matches("input, button")) return;

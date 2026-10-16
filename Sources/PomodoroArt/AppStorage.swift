@@ -73,11 +73,11 @@ final class AppStorage {
         switch (method, operation) {
         case ("GET", "settings"):
             let settings = try read(settingsFile) ?? ["version": 1, "focusMinutes": 25, "breakMinutes": 5]
-            _ = try duration(settings, "focusMinutes", maximum: 60)
+            _ = try duration(settings, "focusMinutes", maximum: 180)
             _ = try duration(settings, "breakMinutes", maximum: 30)
             return settings
         case ("PUT", "settings"):
-            let settings: [String: Any] = ["version": 1, "focusMinutes": try duration(body, "focusMinutes", maximum: 60), "breakMinutes": try duration(body, "breakMinutes", maximum: 30), "updatedAt": timestamp()]
+            let settings: [String: Any] = ["version": 1, "focusMinutes": try duration(body, "focusMinutes", maximum: 180), "breakMinutes": try duration(body, "breakMinutes", maximum: 30), "updatedAt": timestamp()]
             try write(settings, to: settingsFile)
             return settings
         case ("GET", "capture-control"):
@@ -109,7 +109,7 @@ final class AppStorage {
             day["totals"] = totals(days)
             return day
         case ("POST", "completions"):
-            let focus = try duration(body, "focusMinutes", maximum: 60)
+            let focus = try duration(body, "focusMinutes", maximum: 180)
             let rest = try duration(body, "breakMinutes", maximum: 30)
             var log = try read(logFile) ?? emptyLog()
             var days = log["days"] as? [String: [String: Any]] ?? [:]

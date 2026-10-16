@@ -193,6 +193,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
     // Exercise the WebKit bridge and hidden countdown without recording a session.
     private func verifyApp() {
         let setup = """
+        (async () => {
+        const focusBar = document.getElementById('focus-duration');
+        const restBar = document.getElementById('break-duration');
+        if (focusBar.max !== '10800') throw new Error('Focus limit must be three hours');
+        for (const bar of [focusBar, restBar]) {
+          const index = bar === focusBar ? 0 : 1;
+          bar.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+          bar.value = '1790';
+          bar.dispatchEvent(new Event('input', { bubbles: true }));
+          if (modes[index].seconds !== 1800) throw new Error('Dragging must reach exactly 30 minutes');
+          window.dispatchEvent(new PointerEvent('pointerup'));
+        }
+        focusBar.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, cancelable: true }));
+        if (modes[0].seconds !== 1810) throw new Error('Scroll must adjust by ten seconds');
+        focusBar.dispatchEvent(new WheelEvent('wheel', { deltaY: 1, cancelable: true }));
+        if (modes[0].seconds !== 1800) throw new Error('Scroll must return to exactly 30 minutes');
+        durationDrag = { index: 0, fine: true, x: 100, seconds: 1790 };
+        focusBar.dispatchEvent(new PointerEvent('pointermove', { clientX: 102, cancelable: true }));
+        if (modes[0].seconds !== 1800) throw new Error('Fine dragging must reach ten-second steps');
+        window.dispatchEvent(new PointerEvent('pointerup'));
+        for (const seconds of [10, 1790, 1800, 1810, 10790, 10800]) {
+          focusBar.value = String(seconds);
+          focusBar.dispatchEvent(new Event('input', { bubbles: true }));
+          if (modes[0].seconds !== seconds) throw new Error('Exact bar values must remain reachable');
+        }
+        await readStorage('settings', { method: 'PUT', body: JSON.stringify({ focusMinutes: 180, breakMinutes: 30 }) });
+        const saved = await (await readStorage('settings')).json();
+        if (saved.focusMinutes !== 180) throw new Error('Three-hour setting was not saved');
         applyDurationSettings({ focusMinutes: 1 / 6, breakMinutes: 1 / 6 });
         start();
         window.pomodoroApp.setNotificationPermission(true);
@@ -201,16 +229,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         const icon = quit.querySelector('svg').getBoundingClientRect();
         const points = [[bounds.width / 2, bounds.height / 2], [1, 1], [bounds.width - 1, 1],
                         [1, bounds.height - 1], [bounds.width - 1, bounds.height - 1]];
-        points.every(([x, y]) => document.elementFromPoint(bounds.left + x, bounds.top + y)?.closest('#native-quit') === quit)
+        return points.every(([x, y]) => document.elementFromPoint(bounds.left + x, bounds.top + y)?.closest('#native-quit') === quit)
           && Math.abs((icon.left + icon.width / 2) - (bounds.left + bounds.width / 2)) < 0.1
           && Math.abs((icon.top + icon.height / 2) - (bounds.top + bounds.height / 2)) < 0.1
           && document.getElementById('native-notifications').hidden
           && document.getElementById('focus-duration').value === '10'
           && document.getElementById('break-duration').value === '10';
+        })();
         """
-        webView.evaluateJavaScript(setup) { result, error in
+        webView.callAsyncJavaScript("return await " + setup, arguments: [:], in: nil, in: .page) { response in
+            let result: Any?
+            let error: Error?
+            switch response {
+            case .success(let value): result = value; error = nil
+            case .failure(let failure): result = nil; error = failure
+            }
             guard error == nil, result as? Bool == true else {
-                self.finishVerification(false, "Quit hit area, icon alignment, or removed test alert check failed"); return
+                self.finishVerification(false, "Precise slider adjustment or quit hit area check failed: \(error?.localizedDescription ?? "unexpected result")"); return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 guard self.popover.isShown, NSApp.activationPolicy() == .accessory,
@@ -263,7 +298,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
                                         }
                                         self.webView.evaluateJavaScript("reset(); !running && !awaitingConfirmation") { result, error in
                                             self.finishVerification(error == nil && result as? Bool == true,
-                                                "Automatic anchored popover for focus and break completion, next-stage action, and reset")
+                                                "Three-hour focus limit, exact 30-minute and ten-second slider values, persistence, and completion popovers")
                                         }
                                     }
                                 }

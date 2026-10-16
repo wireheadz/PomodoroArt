@@ -16,12 +16,18 @@ do {
     _ = try store.handle("settings", method: "PUT", body: short)
     let reloaded = try AppStorage(directory: folder, captureFile: capture, vault: vault).handle("settings") as! [String: Any]
     try require(abs((reloaded["focusMinutes"] as! Double) * 60 - 10) < 0.00001, "Ten-second settings did not survive restart")
-    for invalid in [5.0 / 60, 11.0 / 60, 61.0] {
+    for invalid in [5.0 / 60, 11.0 / 60, 180.0 + 10.0 / 60] {
         var rejected = false
         do { _ = try store.handle("settings", method: "PUT", body: ["focusMinutes": invalid, "breakMinutes": 5]) }
         catch { rejected = true }
         try require(rejected, "Invalid focus duration accepted")
     }
+    _ = try store.handle("settings", method: "PUT", body: ["focusMinutes": 180, "breakMinutes": 30])
+    let maximum = try AppStorage(directory: folder, captureFile: capture, vault: vault).handle("settings") as! [String: Any]
+    try require(maximum["focusMinutes"] as? Int == 180, "Three-hour setting did not survive restart")
+    _ = try store.handle("settings", method: "PUT", body: ["focusMinutes": 30, "breakMinutes": 10])
+    let exact = try store.handle("settings") as! [String: Any]
+    try require(exact["focusMinutes"] as? Int == 30, "Exact 30-minute setting was lost")
     _ = try store.handle("capture-control", method: "PUT", body: ["paused": true])
     let control = try store.handle("capture-control") as! [String: Any]
     try require(control["paused"] as? Bool == true && control["source"] as? String == "pomodoro-art", "Capture pause command changed")

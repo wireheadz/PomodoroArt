@@ -28,7 +28,7 @@ Move **Pomodoro Art.app** into **Applications** and open it. The build is locall
 
 The icon is a circle with a dot while working, a circle with a line while resting, and an empty circle while idle. Completion uses the built-in notification sound.
 
-Both durations have a **10-second minimum** for testing. Focus goes up to 60 minutes; breaks go up to 30 minutes.
+Both durations have a **10-second minimum** for testing. Drag for whole minutes; Shift-drag, scroll over the bar, or use arrow keys for exact 10-second adjustments. Focus goes up to 3 hours; breaks go up to 30 minutes.
 
 ## Data and permissions
 
