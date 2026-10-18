@@ -9,7 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
     private var webView: WKWebView!
     private var statusItem: NSStatusItem!
     private lazy var storage = AppStorage()
-    private let interfaceURL = Bundle.main.resourceURL!.appendingPathComponent("index.html")
+    private let interfaceURL = Bundle.main.resourceURL!.appendingPathComponent("Panel.html")
     private var ready = false
     private var awaitingStageConfirmation = false
     private var popoverIsClosing = false
@@ -27,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         notifications.removePendingNotificationRequests(withIdentifiers: [notificationID])
         setupMenu()
         let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        config.preferences.javaScriptCanOpenWindowsAutomatically = false
         config.userContentController.add(self, name: "pomodoro")
         config.userContentController.add(self, name: "controls")
         config.userContentController.addScriptMessageHandler(self, contentWorld: .page, name: "storage")
@@ -231,6 +233,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
     private func verifyApp() {
         let setup = """
         (async () => {
+        const blockedConnection = new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Network policy was not enforced')), 2000);
+          document.addEventListener('securitypolicyviolation', event => {
+            if (event.violatedDirective === 'connect-src') { clearTimeout(timeout); resolve(true); }
+          }, { once: true });
+        });
+        fetch('https://example.invalid/pomodoro-network-check').catch(() => {});
+        await blockedConnection;
         const focusBar = document.getElementById('focus-duration');
         const restBar = document.getElementById('break-duration');
         if (focusBar.max !== '10800') throw new Error('Focus limit must be three hours');
@@ -285,7 +295,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
                 self.finishVerification(false, "Precise slider adjustment or quit hit area check failed: \(error?.localizedDescription ?? "unexpected result")"); return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                guard self.popover.isShown, NSApp.activationPolicy() == .accessory,
+                guard !self.webView.configuration.websiteDataStore.isPersistent,
+                      self.popover.isShown, NSApp.activationPolicy() == .accessory,
                       !NSApp.windows.contains(where: { $0.styleMask.contains(.titled) }),
                       let glass = self.popover.contentViewController?.view as? NSVisualEffectView,
                       glass.material == .hudWindow, glass.subviews.count == 1 else {

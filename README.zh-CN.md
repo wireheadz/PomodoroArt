@@ -4,6 +4,8 @@
 
 一个安静的 macOS 菜单栏番茄钟。专心工作，安心休息，由你决定何时开始下一轮。
 
+本项目仅提供 macOS 应用，没有网站、浏览器版或 Web 服务器。内置的 `Panel.html` 仅用于应用内部的 WebKit 界面，必须通过原生应用运行；网络连接已禁用，设置与历史记录使用原生本地存储。
+
 <p align="center"><img src=".github/images/introduction.png" width="380" alt="Pomodoro Art 的磨砂玻璃欢迎面板"></p>
 
 ## 安装

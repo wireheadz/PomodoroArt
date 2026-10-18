@@ -4,6 +4,8 @@
 
 A quiet Pomodoro timer that lives in your Mac’s menu bar. Focus, take a proper break, and choose when to begin again.
 
+This project is a macOS app only. There is no website, browser version, or web server. Its bundled `Panel.html` is an internal WebKit view that requires the native app; network connections are blocked and settings/history use native local storage.
+
 <p align="center"><img src=".github/images/introduction.png" width="380" alt="Pomodoro Art’s glass welcome panel"></p>
 
 ## Install

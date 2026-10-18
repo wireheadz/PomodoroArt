@@ -2,18 +2,19 @@
 <html lang="en" class="menu-bar-app">
   <head>
     <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'" />
+    <script>
+      // This resource runs only inside the macOS app, never as a browser timer.
+      if (!["storage", "pomodoro", "controls"].every(name => window.webkit?.messageHandlers?.[name])) {
+        document.documentElement.hidden = true;
+        window.stop();
+        throw new Error("Open Pomodoro Art.app to use the timer.");
+      }
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#10100f" />
     <title>Pomodoro</title>
     <style>
-      @font-face {
-        font-family: "Maple Mono Local";
-        src: local("Maple Mono NF CN"), local("Maple Mono");
-        font-style: normal;
-        font-weight: 400;
-        font-display: swap;
-      }
-
       :root {
         --ink: #f1eee5;
         --muted: #8f8c83;
@@ -142,7 +143,7 @@
 
       .time {
         display: block;
-        font-family: "Maple Mono Local", "SF Mono", ui-monospace, monospace;
+        font-family: "SF Mono", ui-monospace, monospace;
         font-size: clamp(76px, 19vw, 300px);
         font-weight: 400;
         letter-spacing: .055em;
@@ -242,7 +243,7 @@
         border-radius: 5px;
         color: var(--ink);
         background: rgba(22,22,20,.92);
-        font: 400 11px/1 "Maple Mono Local", "SF Mono", ui-monospace, monospace;
+        font: 400 11px/1 "SF Mono", ui-monospace, monospace;
         letter-spacing: .04em;
         opacity: 0;
         transform: translate(-50%, 4px);
@@ -421,6 +422,10 @@
     </main>
 
     <script>
+      if (!["storage", "pomodoro", "controls"].every(name => window.webkit?.messageHandlers?.[name])) {
+        throw new Error("The native macOS app is required.");
+      }
+
       function readStorage(operation, options = {}) {
         return window.webkit.messageHandlers.storage.postMessage({
           operation, method: options.method || "GET",
@@ -434,23 +439,9 @@
           && Math.abs(seconds - Math.round(seconds)) < 1e-6 && Math.round(seconds) % 10 === 0;
       }
 
-      function loadDurationSettings() {
-        try {
-          const settings = JSON.parse(localStorage.getItem("pomodoro-duration-settings"));
-          const focusMinutes = Number(settings?.focusMinutes);
-          const breakMinutes = Number(settings?.breakMinutes);
-          if (!validDurationMinutes(focusMinutes, 180)) throw new Error();
-          if (!validDurationMinutes(breakMinutes, 30)) throw new Error();
-          return { focusMinutes, breakMinutes };
-        } catch {
-          return { focusMinutes: 25, breakMinutes: 5 };
-        }
-      }
-
-      const savedDurations = loadDurationSettings();
       const modes = [
-        { name: "Focus", seconds: Math.round(savedDurations.focusMinutes * 60), min: 10, max: 10800, accent: "#ff7353" },
-        { name: "Break", seconds: Math.round(savedDurations.breakMinutes * 60), min: 10, max: 1800, accent: "#8bb9b1" },
+        { name: "Focus", seconds: 1500, min: 10, max: 10800, accent: "#ff7353" },
+        { name: "Break", seconds: 300, min: 10, max: 1800, accent: "#8bb9b1" },
       ];
 
       let modeIndex = 0;
@@ -460,7 +451,7 @@
       let intervalId = null;
       let awaitingConfirmation = false;
       let cycleDate = localDateStamp();
-      let completedCycles = loadCycleCount();
+      let completedCycles = 0;
 
       const $ = (id) => document.getElementById(id);
       const time = $("time");
@@ -479,34 +470,6 @@
         return `${year}-${month}-${day}`;
       }
 
-      function loadCycleCount() {
-        try {
-          const saved = JSON.parse(localStorage.getItem("pomodoro-cycle-log"));
-          if (saved?.date !== cycleDate) return 0;
-          return Math.max(0, Number(saved.count) || 0);
-        } catch {
-          return 0;
-        }
-      }
-
-      function saveCycleCount() {
-        try {
-          localStorage.setItem("pomodoro-cycle-log", JSON.stringify({
-            date: cycleDate,
-            count: completedCycles,
-          }));
-        } catch {}
-      }
-
-      function saveDurationSettingsLocally() {
-        try {
-          localStorage.setItem("pomodoro-duration-settings", JSON.stringify({
-            focusMinutes: modes[0].seconds / 60,
-            breakMinutes: modes[1].seconds / 60,
-          }));
-        } catch {}
-      }
-
       function applyDurationSettings(settings) {
         const focusMinutes = Number(settings?.focusMinutes);
         const breakMinutes = Number(settings?.breakMinutes);
@@ -516,7 +479,6 @@
         modes[0].seconds = Math.round(focusMinutes * 60);
         modes[1].seconds = Math.round(breakMinutes * 60);
         remaining = modes[modeIndex].seconds;
-        saveDurationSettingsLocally();
         render();
       }
 
@@ -535,7 +497,6 @@
           focusMinutes: modes[0].seconds / 60,
           breakMinutes: modes[1].seconds / 60,
         };
-        saveDurationSettingsLocally();
         readStorage("settings", {
           method: "PUT",
           body: JSON.stringify(settings),
@@ -575,7 +536,6 @@
         if (!data || typeof data.date !== "string" || !Number.isFinite(Number(data.count))) return;
         cycleDate = data.date;
         completedCycles = Math.max(0, Number(data.count));
-        saveCycleCount();
         renderCycleLog();
       }
 
@@ -596,7 +556,6 @@
           completedCycles = 0;
         }
         completedCycles += 1;
-        saveCycleCount();
         renderCycleLog();
         readStorage("completions", {
           method: "POST",
@@ -730,7 +689,6 @@
         mode.seconds = Math.max(mode.min, Math.min(mode.max, Math.round(seconds / 10) * 10));
         if (index === modeIndex) remaining = mode.seconds;
         sliderRows[index].classList.add("is-previewing");
-        saveDurationSettingsLocally();
         render();
       }
 
