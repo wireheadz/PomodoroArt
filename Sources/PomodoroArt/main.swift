@@ -19,7 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
     private var notificationGeneration = 0
     private let notificationID = "pomodoro-countdown"
     private let notifications = UNUserNotificationCenter.current()
-    private let verifying = CommandLine.arguments.contains("--verify-app")
+    private let verifying = CommandLine.arguments.contains("--verify-app") || CommandLine.arguments.contains("--verify-intro")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -53,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         if !verifying { enableNotifications() }
         if verifying {
             let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-            storage = AppStorage(directory: folder, captureFile: folder.appendingPathComponent("capture.json"), vault: folder.appendingPathComponent("no-vault"))
+            storage = AppStorage(directory: folder)
         }
         webView.loadFileURL(interfaceURL, allowingReadAccessTo: interfaceURL.deletingLastPathComponent())
     }
@@ -67,8 +67,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         ready = true
+        let introduction = CommandLine.arguments.contains("--verify-intro") || (!verifying && !UserDefaults.standard.bool(forKey: "completedIntroduction"))
+        setIntroductionVisible(introduction)
         showPopover()
-        if verifying { verifyApp() } else { refreshNotificationPermission() }
+        if CommandLine.arguments.contains("--verify-intro") { verifyIntroduction() }
+        else if verifying { verifyApp() }
+        else { refreshNotificationPermission() }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
@@ -93,6 +97,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         if message.name == "controls" {
             switch body["action"] as? String {
             case "quit": quit()
+            case "showIntroduction": setIntroductionVisible(true)
+            case "finishIntroduction":
+                if !verifying { UserDefaults.standard.set(true, forKey: "completedIntroduction") }
+                setIntroductionVisible(false)
             case "enableNotifications": openNotificationSettings()
             default: break
             }
@@ -105,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         if !awaiting { pendingCompletionPresentation = false }
         updateIcon(state: state)
         if justCompleted {
+            setIntroductionVisible(false)
             if popoverIsClosing { pendingCompletionPresentation = true }
             else { showPopover() }
         }
@@ -187,6 +196,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         if ready {
             webView.evaluateJavaScript("window.pomodoroApp?.tick()")
             if !verifying { refreshNotificationPermission() }
+        }
+    }
+
+    private func setIntroductionVisible(_ visible: Bool) {
+        webView.evaluateJavaScript("window.pomodoroApp?.showIntroduction(\(visible ? "true" : "false"))")
+    }
+
+    private func verifyIntroduction() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            self.webView.evaluateJavaScript("document.documentElement.classList.contains('introducing') && !running && !document.getElementById('introduction').hidden") { result, error in
+                guard error == nil, result as? Bool == true else {
+                    self.finishVerification(false, "Introduction did not open without starting a timer"); return
+                }
+                if let window = self.popover.contentViewController?.view.window {
+                    let capture = Process()
+                    capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                    capture.arguments = ["-x", "-l", String(window.windowNumber), "/tmp/pomodoro-introduction.png"]
+                    try? capture.run()
+                    capture.waitUntilExit()
+                }
+                self.webView.evaluateJavaScript("document.getElementById('intro-start').click()") { _, _ in
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        self.webView.evaluateJavaScript("!document.documentElement.classList.contains('introducing') && !running") { result, error in
+                            self.finishVerification(error == nil && result as? Bool == true, "First-launch introduction and Open timer action")
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -382,4 +419,4 @@ let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
 app.run()
-if CommandLine.arguments.contains("--verify-app") { exit(verificationExitCode) }
+if CommandLine.arguments.contains("--verify-app") || CommandLine.arguments.contains("--verify-intro") { exit(verificationExitCode) }

@@ -347,14 +347,50 @@
         font: 500 13px -apple-system, BlinkMacSystemFont, sans-serif; cursor: pointer;
       }
       .completion-continue:hover { background: rgba(255,255,255,.19); }
+      .intro-open { border: 0; padding: 0; background: none; color: inherit; text-align: left; cursor: pointer; }
+      .introduction { display: none; }
+      .introducing .introduction:not([hidden]) {
+        position: absolute; inset: 0; padding: 32px 26px 26px;
+        display: flex; flex-direction: column; justify-content: center; gap: 20px;
+      }
+      .introducing .clock-stage, .introducing footer, .introducing .app-identity,
+      .introducing .cycle-log { visibility: hidden; pointer-events: none; }
+      .intro-kicker { color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: .12em; text-transform: uppercase; }
+      .intro-title { margin: 0; font-size: 28px; font-weight: 500; line-height: 1.15; letter-spacing: -.04em; }
+      .intro-description { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
+      .intro-guide { display: grid; gap: 18px; margin: 2px 0; }
+      .intro-step { display: flex; align-items: center; gap: 13px; }
+      .intro-symbol { width: 32px; height: 32px; flex: 0 0 auto; color: var(--accent); }
+      .intro-step strong { display: block; font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+      .intro-step p { margin: 0; font-size: 11px; line-height: 1.5; color: var(--muted); }
+      .intro-start { margin: 0; width: 100%; }
+      .intro-privacy { margin: -8px 0 0; text-align: center; font-size: 10px; line-height: 1.5; color: var(--muted); }
+      @media (prefers-reduced-transparency: reduce) { .menu-bar-app body { background: #303236; } }
     </style>
   </head>
   <body>
     <div class="cycle-log" id="cycle-log" role="status" aria-label="0 completed cycles today"></div>
     <main>
-      <div class="native-only app-identity"><span class="app-name">Pomodoro</span><span class="app-state" id="app-state">Ready to focus</span></div>
+      <div class="native-only app-identity"><button class="app-name intro-open" id="intro-open" type="button" title="About Pomodoro Art">Pomodoro</button><span class="app-state" id="app-state">Ready to focus</span></div>
       <button class="native-only native-quit" id="native-quit" aria-label="Quit Pomodoro" title="Quit Pomodoro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 3v8M6.4 5.8a8 8 0 1 0 11.2 0"/></svg></button>
       <div class="native-message native-only" id="native-message" role="status"></div>
+      <section class="introduction" id="introduction" hidden aria-label="Welcome to Pomodoro Art">
+        <span class="intro-kicker">Welcome to Pomodoro Art</span>
+        <h1 class="intro-title">Make room for focus.</h1>
+        <p class="intro-description">A quiet timer in your menu bar.<br>Set a rhythm. Focus, rest, repeat.</p>
+        <div class="intro-guide">
+          <div class="intro-step">
+            <svg class="intro-symbol" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="18" cy="18" r="14"/><circle cx="18" cy="18" r="4" fill="currentColor" stroke="none"/></svg>
+            <div><strong>Your time, your pace</strong><p>Drag for minutes. Scroll for finer control.<br>Click the countdown to start or pause.</p></div>
+          </div>
+          <div class="intro-step">
+            <svg class="intro-symbol" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="18" cy="18" r="14"/><path d="m11 18 5 5 9-10" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <div><strong>A break you won’t miss</strong><p>The panel opens when time is up.<br>You choose when the next session begins.</p></div>
+          </div>
+        </div>
+        <button class="completion-continue intro-start" id="intro-start" type="button">Open timer</button>
+        <p class="intro-privacy">No account. No tracking. Your history stays on your Mac.</p>
+      </section>
       <section class="clock-stage" aria-label="Pomodoro timer">
         <div class="completion-message" role="status" aria-live="polite">
           <svg class="completion-mark" viewBox="0 0 56 56" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="28" cy="28" r="24"/><path d="m18 28 7 7 14-15" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -423,8 +459,6 @@
       let deadline = 0;
       let intervalId = null;
       let awaitingConfirmation = false;
-      let captureControlInitialized = false;
-      let lastCaptureControlUpdatedAt = null;
       let cycleDate = localDateStamp();
       let completedCycles = loadCycleCount();
 
@@ -513,58 +547,13 @@
         return modeIndex === 0 ? "Working" : "Resting";
       }
 
-      function persistPomodoroStatus() {
+      function publishTimerState() {
         window.webkit?.messageHandlers?.pomodoro?.postMessage({
           state: currentPomodoroStatus(),
           deadline: running ? deadline : null,
           mode: modeIndex === 0 ? "Focus" : "Break",
           awaitingConfirmation,
         });
-        readStorage("status", {
-          method: "PUT",
-          body: JSON.stringify({ state: currentPomodoroStatus() }),
-        }).catch(() => {});
-      }
-
-      function persistCaptureControl(paused) {
-        readStorage("capture-control", {
-          method: "PUT",
-          body: JSON.stringify({ paused }),
-        }).catch(() => {});
-      }
-
-      function pauseForCaptureControl() {
-        if (running) remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-        awaitingConfirmation = false;
-        running = false;
-        clearInterval(intervalId);
-        intervalId = null;
-        persistPomodoroStatus();
-        render();
-      }
-
-      function applyCaptureControl(control) {
-        if (!control || typeof control.paused !== "boolean" || typeof control.updatedAt !== "string") return;
-        if (control.updatedAt === lastCaptureControlUpdatedAt) return;
-        const isInitialControl = !captureControlInitialized;
-        captureControlInitialized = true;
-        lastCaptureControlUpdatedAt = control.updatedAt;
-        if (control.source === "pomodoro-art") return;
-        if (control.paused) {
-          pauseForCaptureControl();
-        } else if (!isInitialControl && !running) {
-          start();
-        }
-      }
-
-      function loadCaptureControlFromDisk() {
-        readStorage("capture-control", {})
-          .then((response) => {
-            if (!response.ok) throw new Error("Unable to load capture control");
-            return response.json();
-          })
-          .then(applyCaptureControl)
-          .catch(() => {});
       }
 
       function renderCycleLog() {
@@ -665,8 +654,7 @@
         running = false;
         clearInterval(intervalId);
         intervalId = null;
-        persistPomodoroStatus();
-        persistCaptureControl(true);
+        publishTimerState();
         render();
       }
 
@@ -675,8 +663,7 @@
         if (remaining === 0) remaining = modes[modeIndex].seconds;
         running = true;
         deadline = Date.now() + remaining * 1000;
-        persistPomodoroStatus();
-        persistCaptureControl(false);
+        publishTimerState();
         render();
         clearInterval(intervalId);
         intervalId = setInterval(tick, 1000);
@@ -700,8 +687,7 @@
         intervalId = null;
         if (modeIndex === 1) recordCompletedCycle();
         awaitingConfirmation = true;
-        persistPomodoroStatus();
-        persistCaptureControl(true);
+        publishTimerState();
         if (navigator.vibrate) navigator.vibrate([140, 80, 220]);
         render();
       }
@@ -730,6 +716,8 @@
 
       toggle.addEventListener("click", toggleTimer);
       $("completion-continue").addEventListener("click", () => { if (awaitingConfirmation) toggleTimer(); });
+      $("intro-start").addEventListener("click", () => window.webkit.messageHandlers.controls.postMessage({ action: "finishIntroduction" }));
+      $("intro-open").addEventListener("click", () => window.webkit.messageHandlers.controls.postMessage({ action: "showIntroduction" }));
       $("native-quit").addEventListener("click", () => window.webkit?.messageHandlers?.controls?.postMessage({ action: "quit" }));
       $("native-notifications").addEventListener("click", () => window.webkit?.messageHandlers?.controls?.postMessage({ action: "enableNotifications" }));
       $("reset").addEventListener("click", reset);
@@ -791,6 +779,7 @@
       window.addEventListener("pointercancel", finishDurationDrag);
 
       document.addEventListener("keydown", (event) => {
+        if (document.documentElement.classList.contains("introducing")) return;
         if (event.target.matches("input, button")) return;
         if (event.code === "Space") { event.preventDefault(); toggleTimer(); }
         if (event.key.toLowerCase() === "r") reset();
@@ -799,17 +788,19 @@
       renderCycleLog();
       window.pomodoroApp = {
         toggleTimer, reset, tick,
+        showIntroduction(show) {
+          $("introduction").hidden = !show;
+          document.documentElement.classList.toggle("introducing", show);
+        },
         setNotificationPermission(permitted) {
           $("native-notifications").hidden = permitted;
         },
         showMessage(title, message) { $("native-message").textContent = `${title}: ${message}`; },
       };
       render();
-      persistPomodoroStatus();
+      publishTimerState();
       loadCycleLogFromDisk();
       loadDurationSettingsFromDisk();
-      loadCaptureControlFromDisk();
-      setInterval(loadCaptureControlFromDisk, 1000);
     </script>
   </body>
 </html>
