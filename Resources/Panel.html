@@ -450,7 +450,7 @@
       let deadline = 0;
       let intervalId = null;
       let awaitingConfirmation = false;
-      let cycleDate = localDateStamp();
+      let cycleRequestVersion = 0;
       let completedCycles = 0;
 
       const $ = (id) => document.getElementById(id);
@@ -461,14 +461,6 @@
       const sliderRows = [$("focus-row"), $("break-row")];
       const previews = [$("focus-preview"), $("break-preview")];
       const cycleLog = $("cycle-log");
-
-      function localDateStamp() {
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, "0");
-        const day = String(now.getDate()).padStart(2, "0");
-        return `${year}-${month}-${day}`;
-      }
 
       function applyDurationSettings(settings) {
         const focusMinutes = Number(settings?.focusMinutes);
@@ -532,44 +524,39 @@
         );
       }
 
-      function applyCycleData(data) {
+      function applyCycleData(data, version) {
+        if (version !== cycleRequestVersion) return;
         if (!data || typeof data.date !== "string" || !Number.isFinite(Number(data.count))) return;
-        cycleDate = data.date;
-        completedCycles = Math.max(0, Number(data.count));
+        // A reply sent before midnight must not restore yesterday's count.
+        if (Number(data.dayEndsAt) <= Date.now()) return loadCycleLogFromDisk();
+        completedCycles = Math.max(0, Math.floor(Number(data.count)));
         renderCycleLog();
       }
 
-      function loadCycleLogFromDisk() {
-        readStorage("completions/today", {})
-          .then((response) => {
-            if (!response.ok) throw new Error("Unable to load completion log");
+      function readCycleData(operation, options = {}) {
+        const version = ++cycleRequestVersion;
+        return readStorage(operation, options)
+          .then(response => {
+            if (!response.ok) throw new Error("Unable to update completed rounds");
             return response.json();
           })
-          .then(applyCycleData)
+          .then(data => applyCycleData(data, version))
           .catch(() => {});
       }
 
+      function loadCycleLogFromDisk() {
+        return readCycleData("completions/today");
+      }
+
       function recordCompletedCycle() {
-        const today = localDateStamp();
-        if (today !== cycleDate) {
-          cycleDate = today;
-          completedCycles = 0;
-        }
-        completedCycles += 1;
-        renderCycleLog();
-        readStorage("completions", {
+        // Native storage owns the date and count; never increment yesterday's UI.
+        return readCycleData("completions", {
           method: "POST",
           body: JSON.stringify({
             focusMinutes: modes[0].seconds / 60,
             breakMinutes: modes[1].seconds / 60,
           }),
-        })
-          .then((response) => {
-            if (!response.ok) throw new Error("Unable to save completion");
-            return response.json();
-          })
-          .then(applyCycleData)
-          .catch(() => {});
+        });
       }
 
       function render() {
@@ -647,7 +634,6 @@
         if (modeIndex === 1) recordCompletedCycle();
         awaitingConfirmation = true;
         publishTimerState();
-        if (navigator.vibrate) navigator.vibrate([140, 80, 220]);
         render();
       }
 
@@ -669,7 +655,8 @@
       function reset() {
         awaitingConfirmation = false;
         stop();
-        remaining = modes[modeIndex].seconds;
+        modeIndex = 0;
+        remaining = modes[0].seconds;
         render();
       }
 
@@ -745,7 +732,7 @@
 
       renderCycleLog();
       window.pomodoroApp = {
-        toggleTimer, reset, tick,
+        toggleTimer, reset, tick, refreshDay: loadCycleLogFromDisk,
         showIntroduction(show) {
           $("introduction").hidden = !show;
           document.documentElement.classList.toggle("introducing", show);

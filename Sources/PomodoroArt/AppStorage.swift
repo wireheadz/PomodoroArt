@@ -4,13 +4,15 @@ import CoreFoundation
 /// Settings and history stored only inside the app’s Application Support folder.
 final class AppStorage {
     let directory: URL
+    private let now: () -> Date
     private let timeZone: TimeZone
     private let manager = FileManager.default
     private let encoder = JSONSerialization.WritingOptions([.prettyPrinted, .sortedKeys])
 
-    init(directory: URL? = nil, timeZone: TimeZone = .autoupdatingCurrent) {
+    init(directory: URL? = nil, timeZone: TimeZone = .autoupdatingCurrent, now: @escaping () -> Date = Date.init) {
         self.directory = directory ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Pomodoro Art")
         self.timeZone = timeZone
+        self.now = now
     }
 
     private func read(_ url: URL) throws -> [String: Any]? {
@@ -38,12 +40,20 @@ final class AppStorage {
         return seconds.rounded() / 60
     }
 
-    private func timestamp() -> String {
+    var nextDayStart: Date { nextDayStart(after: now()) }
+
+    private func nextDayStart(after date: Date) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        return calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: date))!
+    }
+
+    private func timestamp(at date: Date? = nil) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = timeZone
         formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssXXX"
-        return formatter.string(from: Date())
+        return formatter.string(from: date ?? now())
     }
 
     private func emptyLog() -> [String: Any] {
@@ -78,8 +88,10 @@ final class AppStorage {
         case ("GET", "completions/today"):
             let log = try read(logFile) ?? emptyLog()
             let days = log["days"] as? [String: [String: Any]] ?? [:]
-            let today = String(timestamp().prefix(10))
+            let instant = now()
+            let today = String(timestamp(at: instant).prefix(10))
             var day = days[today] ?? ["count": 0, "focusMinutes": 0, "breakMinutes": 0, "completedAt": [String]()]
+            day["dayEndsAt"] = nextDayStart(after: instant).timeIntervalSince1970 * 1000
             day["date"] = today
             day["totals"] = totals(days)
             return day
@@ -88,7 +100,8 @@ final class AppStorage {
             let rest = try duration(body, "breakMinutes", maximum: 30)
             var log = try read(logFile) ?? emptyLog()
             var days = log["days"] as? [String: [String: Any]] ?? [:]
-            let time = timestamp()
+            let instant = now()
+            let time = timestamp(at: instant)
             let today = String(time.prefix(10))
             var day = days[today] ?? [:]
             var dates = day["completedAt"] as? [String] ?? []
@@ -108,6 +121,7 @@ final class AppStorage {
             log["totals"] = totals(days)
             try write(log, to: logFile)
             var result = day
+            result["dayEndsAt"] = nextDayStart(after: instant).timeIntervalSince1970 * 1000
             result["date"] = today
             result["totals"] = log["totals"]
             return result

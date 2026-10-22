@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
     private var popoverIsClosing = false
     private var pendingCompletionPresentation = false
     private var deadlineTimer: Timer?
+    private var dayTimer: Timer?
     private var activity: NSObjectProtocol?
     private var notificationGeneration = 0
     private let notificationID = "pomodoro-countdown"
@@ -52,6 +53,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         popover.animates = true
         popover.delegate = self
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
+        for name in [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange, .NSSystemClockDidChange] {
+            NotificationCenter.default.addObserver(self, selector: #selector(refreshDailyCount), name: name, object: nil)
+        }
         if !verifying { enableNotifications() }
         if verifying {
             let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -197,6 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         popover.contentViewController?.view.window?.makeKey()
         if ready {
             webView.evaluateJavaScript("window.pomodoroApp?.tick()")
+            refreshDailyCount()
             if !verifying { refreshNotificationPermission() }
         }
     }
@@ -241,6 +246,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         });
         fetch('https://example.invalid/pomodoro-network-check').catch(() => {});
         await blockedConnection;
+        const originalReadStorage = readStorage;
+        const pendingDays = [];
+        readStorage = () => new Promise(resolve => pendingDays.push(data => resolve({ ok: true, json: async () => data })));
+        const day = (date, count) => ({ date, count, dayEndsAt: Date.now() + 60000 });
+        try {
+          const yesterday = loadCycleLogFromDisk();
+          const midnight = loadCycleLogFromDisk();
+          pendingDays[1](day('2030-01-02', 0));
+          await midnight;
+          pendingDays[0](day('2030-01-01', 8));
+          await yesterday;
+          if (completedCycles !== 0 || cycleLog.children.length !== 0) throw new Error('Late reply restored yesterday’s rounds');
+          const completion = recordCompletedCycle();
+          pendingDays[2](day('2030-01-02', 1));
+          await completion;
+          if (completedCycles !== 1) throw new Error('New-day completion was not displayed');
+          const expired = loadCycleLogFromDisk();
+          pendingDays[3]({ date: '2030-01-01', count: 9, dayEndsAt: Date.now() - 1 });
+          await new Promise(resolve => setTimeout(resolve, 0));
+          pendingDays[4](day('2030-01-02', 1));
+          await expired;
+          if (completedCycles !== 1) throw new Error('Expired reply restored yesterday’s count');
+          for (const state of ['focus-finished', 'break-running', 'break-paused']) {
+            modeIndex = state === 'focus-finished' ? 0 : 1;
+            awaitingConfirmation = state === 'focus-finished';
+            if (state === 'break-running') start();
+            reset();
+            if (running || awaitingConfirmation || modeIndex !== 0 || remaining !== modes[0].seconds || completedCycles !== 1)
+              throw new Error('Reset did not abandon the unfinished round and restore fresh focus');
+          }
+        } finally { readStorage = originalReadStorage; }
+        await loadCycleLogFromDisk();
+        if (completedCycles !== 0) throw new Error('Interrupted round was recorded');
         const focusBar = document.getElementById('focus-duration');
         const restBar = document.getElementById('break-duration');
         if (focusBar.max !== '10800') throw new Error('Focus limit must be three hours');
@@ -296,6 +334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 guard !self.webView.configuration.websiteDataStore.isPersistent,
+                      self.dayTimer?.isValid == true,
                       self.popover.isShown, NSApp.activationPolicy() == .accessory,
                       !NSApp.windows.contains(where: { $0.styleMask.contains(.titled) }),
                       let glass = self.popover.contentViewController?.view as? NSVisualEffectView,
@@ -344,9 +383,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
                                         guard error == nil, result as? Bool == true else {
                                             self.finishVerification(false, "Break completion content was incorrect"); return
                                         }
-                                        self.webView.evaluateJavaScript("reset(); !running && !awaitingConfirmation") { result, error in
+                                        self.webView.evaluateJavaScript("reset(); !running && !awaitingConfirmation && modeIndex === 0 && remaining === modes[0].seconds") { result, error in
                                             self.finishVerification(error == nil && result as? Bool == true,
-                                                "Three-hour focus limit, exact 30-minute and ten-second slider values, persistence, and completion popovers")
+                                                "Daily count refresh, stale-response protection, whole-round reset, precise sliders, and completion popovers")
                                         }
                                     }
                                 }
@@ -366,7 +405,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         }
         NSApp.terminate(nil)
     }
-    @objc private func didWake() { if ready { webView.evaluateJavaScript("window.pomodoroApp?.tick()") } }
+    @objc private func refreshDailyCount() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.refreshDailyCount() }
+            return
+        }
+        guard ready else { return }
+        webView.evaluateJavaScript("window.pomodoroApp?.refreshDay()")
+        dayTimer?.invalidate()
+        // Calendar days can be 23 or 25 hours; always use the next local midnight.
+        let timer = Timer(fire: storage.nextDayStart, interval: 0, repeats: false) { [weak self] _ in
+            self?.refreshDailyCount()
+        }
+        dayTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    @objc private func didWake() {
+        if ready {
+            webView.evaluateJavaScript("window.pomodoroApp?.tick()")
+            refreshDailyCount()
+        }
+    }
     @objc private func quit() { NSApp.terminate(nil) }
     @objc private func enableNotifications() {
         notifications.getNotificationSettings { [weak self] settings in
@@ -416,6 +476,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, WKS
         notificationGeneration += 1
         notifications.removePendingNotificationRequests(withIdentifiers: [notificationID])
         deadlineTimer?.invalidate()
+        dayTimer?.invalidate()
+        NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         if verifying { try? FileManager.default.removeItem(at: storage.directory) }
     }
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {

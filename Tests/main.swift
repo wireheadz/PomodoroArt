@@ -52,7 +52,38 @@ do {
     }
     let files = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
     try require(files == ["completions.json", "settings.json"], "Unexpected files written")
-    print("PASS: settings, exact durations, history preservation, local timezone, and app-only storage")
+    let midnightFolder = folder.appendingPathComponent("midnight-tests")
+    let iso = ISO8601DateFormatter()
+    var clock = iso.date(from: "2030-01-02T07:59:59Z")! // 23:59:59 in Los Angeles.
+    let localZone = TimeZone(identifier: "America/Los_Angeles")!
+    let midnightStore = AppStorage(directory: midnightFolder, timeZone: localZone, now: { clock })
+    _ = try midnightStore.handle("completions", method: "POST", body: short)
+    let beforeMidnight = try midnightStore.handle("completions/today") as! [String: Any]
+    try require(beforeMidnight["date"] as? String == "2030-01-01", "Used UTC instead of local day")
+    try require(beforeMidnight["count"] as? Int == 1, "Round before midnight missing")
+    try require(midnightStore.nextDayStart == iso.date(from: "2030-01-02T08:00:00Z")!, "Next refresh is not local midnight")
+    clock = clock.addingTimeInterval(1)
+    let afterMidnight = try midnightStore.handle("completions/today") as! [String: Any]
+    try require(afterMidnight["date"] as? String == "2030-01-02" && afterMidnight["count"] as? Int == 0, "Midnight did not reset today's count")
+    _ = try midnightStore.handle("completions", method: "POST", body: short)
+    let restarted = AppStorage(directory: midnightFolder, timeZone: localZone, now: { clock })
+    let newDay = try restarted.handle("completions/today") as! [String: Any]
+    try require(newDay["count"] as? Int == 1, "New-day count did not survive restart")
+    let midnightLog = try JSONSerialization.jsonObject(with: Data(contentsOf: midnightFolder.appendingPathComponent("completions.json"))) as! [String: Any]
+    let midnightDays = midnightLog["days"] as! [String: [String: Any]]
+    try require(midnightDays["2030-01-01"]?["count"] as? Int == 1, "Midnight erased historical rounds")
+    let changedZone = AppStorage(directory: midnightFolder, timeZone: zone, now: { clock })
+    let traveled = try changedZone.handle("completions/today") as! [String: Any]
+    try require(traveled["date"] as? String == "2030-01-01", "Timezone change did not use the current local date")
+    for (start, end, hours) in [("2030-03-10T08:00:00Z", "2030-03-11T07:00:00Z", 23.0), ("2030-11-03T07:00:00Z", "2030-11-04T08:00:00Z", 25.0)] {
+        clock = iso.date(from: start)!
+        try require(midnightStore.nextDayStart == iso.date(from: end)!, "DST scheduled the wrong local midnight")
+        try require(midnightStore.nextDayStart.timeIntervalSince(clock) == hours * 3600, "Assumed a fixed 24-hour day")
+    }
+    clock = iso.date(from: "2030-01-05T20:00:00Z")!
+    let afterSleep = try midnightStore.handle("completions/today") as! [String: Any]
+    try require(afterSleep["count"] as? Int == 0, "Several days asleep leaked an old count")
+    print("PASS: settings, exact durations, history preservation, local midnight, DST, timezone changes, history, and app-only storage")
 } catch {
     fputs("FAIL: \(error.localizedDescription)\n", stderr)
     exit(1)

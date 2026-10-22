@@ -23,13 +23,13 @@ This community build is locally signed, not Apple-notarized. macOS may block its
 - Set focus up to **3 hours** and breaks up to **30 minutes**. Both support a **10-second minimum**.
 - Drag a bar for whole minutes. **Shift-drag**, scroll, or use arrow keys for 10-second precision.
 - When time is up, the panel opens and a system notification sounds. Choose **Start break** or **Start focus** when you’re ready.
-- Click outside to close the panel without interrupting the timer. **Reset** resets the stage; the power icon quits.
+- Click outside to close the panel without interrupting the timer. **Reset** abandons the current round and returns to a fresh, stopped focus session; the power icon quits.
 
 The icon is a circle with a dot while working, a circle with a line while resting, and an empty circle while idle. It never shows a countdown in the menu bar.
 
 ## Private by default
 
-No account, analytics, server, or third-party integrations. Settings and completed cycles are stored only in `~/Library/Application Support/Pomodoro Art/`. Session dates follow your Mac’s local timezone. Existing local history is preserved when updating.
+No account, analytics, server, or third-party integrations. Settings and completed cycles are stored only in `~/Library/Application Support/Pomodoro Art/`. The completed-round count resets at midnight in your Mac’s local timezone, including after sleep or timezone changes. A round counts only after both focus and break finish; previous days remain in history. Existing local history is preserved when updating.
 
 Allow notifications on first launch. If you previously denied them, **Enable notifications** opens System Settings. Focus mode and sleep can delay notification delivery; the countdown catches up on wake.
 
